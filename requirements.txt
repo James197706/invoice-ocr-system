@@ -1,0 +1,18 @@
+# 發票智能辨識系統 — 雲端版套件清單
+# 適用於 Streamlit Cloud 部署
+
+# Web 介面框架
+streamlit>=1.32.0
+
+# Claude AI SDK
+anthropic>=0.25.0
+
+# 資料處理 / Excel 匯出
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# 圖片處理
+Pillow>=10.0.0
+
+# PDF 轉圖片（雲端部署亦支援）
+pymupdf>=1.23.0

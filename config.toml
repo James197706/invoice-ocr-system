@@ -1,0 +1,13 @@
+[server]
+# 雲端部署時請勿開啟 fileWatcherType = "none"（讓 Cloud 自動管理）
+maxUploadSize = 50          # 最大上傳檔案 MB
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+primaryColor     = "#3B82F6"   # 主要按鈕/選取顏色（藍）
+backgroundColor  = "#F8FAFC"   # 頁面背景
+secondaryBackgroundColor = "#EFF6FF"   # 側邊欄背景
+textColor        = "#1F2937"   # 主文字顏色
+font             = "sans serif"
