@@ -49,7 +49,7 @@ from excel_exporter import create_invoice_excel
 # ─────────────────────────────────────────
 # 版本常數
 # ─────────────────────────────────────────
-APP_VERSION = "3.2"
+APP_VERSION = "3.3"
 
 # ─────────────────────────────────────────
 # 共用選項列表（DRY：單一定義，多處共用）
@@ -82,6 +82,7 @@ USAGE_GUIDE = [
         "body": [
             "支援 PNG、JPG、JPEG、PDF，單檔上限 20MB；PDF 會自動拆頁逐張辨識。",
             "可一次多選多張檔案，系統會並發辨識以縮短等待時間。",
+            "若掃描型 PDF 的同一頁內包含多張發票，系統會自動嘗試拆成多筆資料供後續審核。",
             "若今日剩餘額度不足，系統會先處理可用額度內的張數，並提示剩餘檔案稍後再試。",
         ],
     },
@@ -111,6 +112,19 @@ BEST_PRACTICES = [
 ]
 
 PLATFORM_RELEASE_NOTES = [
+    {
+        "version": "v3.3",
+        "date": "2026-03-17",
+        "items": [
+            "新增掃描型 PDF 多發票辨識：同一頁若包含多張發票或收據，系統會自動拆成多筆資料。",
+            "批次辨識流程現在支援單頁輸出多筆發票，後續審核、會計欄位帶入與 Excel 匯出皆可沿用。",
+            "平台內建使用說明與版本更新頁籤，使用者可直接在系統內查閱操作指引與更新內容。",
+            "新增辨識前剩餘額度預檢，避免超過今日可用額度的檔案進入辨識流程後才失敗。",
+            "修正預設部門、費用科目、專案代碼帶入邏輯，空白欄位現在會正確套用。",
+            "強化 AI JSON 解析，兼容多段文字與 code fence 格式回應。",
+            "統一平台與後端的單檔上限為 20MB，避免操作說明與實際限制不一致。",
+        ],
+    },
     {
         "version": "v3.2",
         "date": "2026-03-17",
@@ -558,34 +572,46 @@ SYSTEM_PROMPT = """你是一位專業的財務發票辨識 AI 助手，專門協
 - 只回傳 JSON，不要包含 markdown 或其他說明文字
 """
 
-EXTRACT_PROMPT = """請辨識這張發票圖片，並提取以下欄位，以 JSON 格式回傳：
+EXTRACT_PROMPT = """請辨識這張發票圖片，並提取以下欄位，以 JSON 格式回傳。
 
+重要說明：
+- 這張圖片可能只包含 1 張發票，也可能是掃描頁面，內含多張彼此獨立的發票或收據
+- 若同一張圖片內有多張獨立發票，請務必拆成多筆 documents
+- 若只有 1 張，也請回傳 documents 陣列，裡面只放 1 筆
+- 若頁面中沒有可辨識的有效發票，請回傳 {"documents": []}
+
+請使用以下 JSON 結構：
 {
-  "invoice_type": "台灣二聯發票|台灣三聯發票|一般收據|自製發票|國外發票|電子發票|其他",
-  "invoice_number": "發票號碼",
-  "invoice_date": "YYYY/MM/DD",
-  "seller_name": "賣方名稱",
-  "seller_tax_id": "賣方統一編號（8位）",
-  "buyer_name": "買方名稱",
-  "buyer_tax_id": "買方統一編號（8位）",
-  "currency": "TWD|USD|EUR|JPY|其他",
-  "items": [
+  "documents": [
     {
-      "description": "品項名稱",
-      "quantity": "數量",
-      "unit": "單位",
-      "unit_price": "單價",
-      "amount": "小計"
+      "page_label": "若同頁有多張，標示大致位置或第幾張，例如 左上、右下、invoice-2；若只有一張可留空",
+      "invoice_type": "台灣二聯發票|台灣三聯發票|一般收據|自製發票|國外發票|電子發票|其他",
+      "invoice_number": "發票號碼",
+      "invoice_date": "YYYY/MM/DD",
+      "seller_name": "賣方名稱",
+      "seller_tax_id": "賣方統一編號（8位）",
+      "buyer_name": "買方名稱",
+      "buyer_tax_id": "買方統一編號（8位）",
+      "currency": "TWD|USD|EUR|JPY|其他",
+      "items": [
+        {
+          "description": "品項名稱",
+          "quantity": "數量",
+          "unit": "單位",
+          "unit_price": "單價",
+          "amount": "小計"
+        }
+      ],
+      "subtotal": "未稅金額",
+      "tax_rate": "稅率（如5代表5%）",
+      "tax_amount": "稅額",
+      "total_amount": "含稅總金額",
+      "payment_method": "現金|轉帳|信用卡|支票|其他",
+      "notes": "備註",
+      "confidence": 0~100,
+      "issues": "辨識困難說明"
     }
-  ],
-  "subtotal": "未稅金額",
-  "tax_rate": "稅率（如5代表5%）",
-  "tax_amount": "稅額",
-  "total_amount": "含稅總金額",
-  "payment_method": "現金|轉帳|信用卡|支票|其他",
-  "notes": "備註",
-  "confidence": 0~100,
-  "issues": "辨識困難說明"
+  ]
 }"""
 
 
@@ -613,6 +639,40 @@ def _parse_ai_json(raw_text: str) -> dict:
     return json.loads(payload)
 
 
+def _normalize_single_document(data: dict, source_file: str) -> dict:
+    normalized = dict(data or {})
+    normalized.setdefault("items", [])
+    normalized["source_file"] = source_file
+    normalized["recognized_at"] = datetime.now().strftime("%Y/%m/%d %H:%M")
+    normalized["status"] = "✅ 完成"
+    return normalized
+
+
+def _normalize_recognized_documents(data: dict, filename: str) -> list[dict]:
+    if not isinstance(data, dict):
+        return [_error_record(filename, "AI 回傳資料格式異常，請重試", "")]
+
+    documents = data.get("documents")
+    if isinstance(documents, list):
+        normalized_docs = []
+        total_docs = len(documents)
+        for idx, doc in enumerate(documents, start=1):
+            if not isinstance(doc, dict):
+                continue
+
+            label = str(doc.get("page_label", "")).strip()
+            suffix = label or (f"part-{idx}" if total_docs > 1 else "")
+            source_file = f"{filename}#{suffix}" if suffix else filename
+            normalized_docs.append(_normalize_single_document(doc, source_file))
+
+        if normalized_docs:
+            return normalized_docs
+
+        return [_error_record(filename, "未偵測到可辨識的發票資料，請確認掃描內容是否清晰", "")]
+
+    return [_normalize_single_document(data, filename)]
+
+
 def pdf_to_images(pdf_bytes: bytes) -> list:
     if not HAS_PYMUPDF:
         st.warning("⚠️ 未安裝 PyMuPDF，無法處理 PDF，請改上傳圖片格式。")
@@ -630,20 +690,21 @@ def pdf_to_images(pdf_bytes: bytes) -> list:
         raise ValueError("PDF 解析失敗，可能為加密、損毀或不支援的檔案") from e
 
 
-def recognize_invoice(image_bytes: bytes, filename: str = "") -> dict:
+def recognize_invoice(image_bytes: bytes, filename: str = "") -> list[dict]:
     """
     呼叫 Claude API 辨識發票。
     使用快取的 Client 物件，並在呼叫前檢查全站每日用量上限。
+    同一張圖片若包含多張獨立發票，會回傳多筆資料。
     """
     if not API_KEY:
-        return _error_record(filename, "系統尚未設定 API 金鑰，請聯絡管理員", "")
+        return [_error_record(filename, "系統尚未設定 API 金鑰，請聯絡管理員", "")]
 
     if not _check_and_increment_api_count():
-        return _error_record(
+        return [_error_record(
             filename,
             f"已達今日辨識上限（{DAILY_LIMIT} 張），請明日再試或聯絡管理員調整上限",
             ""
-        )
+        )]
 
     client = _get_anthropic_client()
 
@@ -675,24 +736,20 @@ def recognize_invoice(image_bytes: bytes, filename: str = "") -> dict:
 
         raw = _extract_response_text(response)
         data = _parse_ai_json(raw)
-        data.setdefault("items", [])
-        data["source_file"]   = filename
-        data["recognized_at"] = datetime.now().strftime("%Y/%m/%d %H:%M")
-        data["status"]        = "✅ 完成"
-        return data
+        return _normalize_recognized_documents(data, filename)
 
     except json.JSONDecodeError:
-        return _error_record(filename, "AI 回應格式異常，請重試", "")
+        return [_error_record(filename, "AI 回應格式異常，請重試", "")]
     except KeyError:
-        return _error_record(filename, "回傳資料結構不符，請重試", "")
+        return [_error_record(filename, "回傳資料結構不符，請重試", "")]
     except anthropic.AuthenticationError:
-        return _error_record(filename, "API 金鑰無效，請聯絡管理員重新設定", "")
+        return [_error_record(filename, "API 金鑰無效，請聯絡管理員重新設定", "")]
     except anthropic.RateLimitError:
-        return _error_record(filename, "API 呼叫頻率超限，請稍後再試", "")
+        return [_error_record(filename, "API 呼叫頻率超限，請稍後再試", "")]
     except Exception as e:
         # [SEC P3] 例外細節只記錄到伺服器 log，不暴露給使用者
         print(f"[SECURITY LOG] recognize_invoice error ({filename}): {type(e).__name__}: {e}")
-        return _error_record(filename, "辨識失敗，請稍後再試或聯絡管理員", "")
+        return [_error_record(filename, "辨識失敗，請稍後再試或聯絡管理員", "")]
 
 
 def _error_record(filename: str, issue: str, notes: str) -> dict:
@@ -712,7 +769,7 @@ def _error_record(filename: str, issue: str, notes: str) -> dict:
 def recognize_batch(tasks: list[tuple[bytes, str]],
                     progress_bar, status_msg) -> list[dict]:
     """並發辨識多張發票（最多 5 個同時進行）"""
-    results_map: dict[int, dict] = {}
+    results_map: dict[int, list[dict]] = {}
     total = len(tasks)
     completed_count = 0
     max_workers = min(5, total)
@@ -730,13 +787,16 @@ def recognize_batch(tasks: list[tuple[bytes, str]],
             except Exception as e:
                 _, fname = tasks[idx]
                 print(f"[SECURITY LOG] recognize_batch exception ({fname}): {type(e).__name__}: {e}")
-                results_map[idx] = _error_record(fname, "辨識失敗，請稍後再試", "")
+                results_map[idx] = [_error_record(fname, "辨識失敗，請稍後再試", "")]
 
             completed_count += 1
             progress_bar.progress(completed_count / total)
             status_msg.text(f"⏳ 辨識中 ({completed_count}/{total})…")
 
-    return [results_map[i] for i in range(total)]
+    flat_results = []
+    for i in range(total):
+        flat_results.extend(results_map.get(i, []))
+    return flat_results
 
 
 # ─────────────────────────────────────────
