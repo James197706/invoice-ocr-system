@@ -90,6 +90,22 @@ def _safe_float(value) -> float:
         return 0.0
 
 
+def _normalized_currency(value: Any) -> str:
+    return (str(value or "TWD").strip() or "TWD").upper()
+
+
+def _build_currency_totals(invoices: list[dict]) -> dict[str, dict[str, float]]:
+    totals: dict[str, dict[str, float]] = {}
+    for inv in invoices:
+        currency = _normalized_currency(inv.get("currency", "TWD"))
+        bucket = totals.setdefault(currency, {"subtotal": 0.0, "tax": 0.0, "total": 0.0, "count": 0})
+        bucket["count"] += 1
+        bucket["subtotal"] += _safe_float(inv.get("subtotal", 0))
+        bucket["tax"] += _safe_float(inv.get("tax_amount", 0))
+        bucket["total"] += _safe_float(inv.get("total_amount", 0))
+    return totals
+
+
 # ─────────────────────────────────────────
 # 工作表 1：發票彙總
 # ─────────────────────────────────────────
@@ -154,15 +170,10 @@ def _build_summary_sheet(ws, invoices: list[dict], title: str,
 
     # ── 資料列 ──────────────────────────────────
     DATA_START = HEADER_ROW + 1
-    total_twn = 0.0
-
     for row_offset, inv in enumerate(invoices):
         r = DATA_START + row_offset
         bg = CLR_ALT_ROW if row_offset % 2 == 0 else "FFFFFF"
         row_fill = _fill(bg)
-
-        total_val = _safe_float(inv.get("total_amount", 0))
-        total_twn += total_val if inv.get("currency", "TWD") == "TWD" else 0
 
         row_data = [
             row_offset + 1,
@@ -218,18 +229,21 @@ def _build_summary_sheet(ws, invoices: list[dict], title: str,
     total_cell.alignment = _center()
     total_cell.border = _thin_border()
 
-    # 未稅合計
-    subtotal_sum = sum(_safe_float(inv.get("subtotal", 0)) for inv in invoices)
-    tax_sum = sum(_safe_float(inv.get("tax_amount", 0)) for inv in invoices)
-    total_sum = sum(_safe_float(inv.get("total_amount", 0)) for inv in invoices)
-
-    for col, val in [(14, subtotal_sum), (16, tax_sum), (17, total_sum)]:
-        cell = ws.cell(row=total_row, column=col, value=val)
-        cell.font = Font(name="Arial", bold=True, size=11, color=CLR_TOTAL_FG)
-        cell.fill = _fill(CLR_TOTAL_BG)
-        cell.border = _thin_border()
-        cell.alignment = _right()
-        cell.number_format = '#,##0.00'
+    currency_totals = _build_currency_totals(invoices)
+    currencies = list(currency_totals.keys())
+    if len(currencies) == 1:
+        only_currency = currencies[0] if currencies else "TWD"
+        total_cell.value = f"合計（共 {len(invoices)} 筆，幣別：{only_currency}）"
+        totals = currency_totals.get(only_currency, {"subtotal": 0.0, "tax": 0.0, "total": 0.0})
+        for col, val in [(14, totals["subtotal"]), (16, totals["tax"]), (17, totals["total"])]:
+            cell = ws.cell(row=total_row, column=col, value=val)
+            cell.font = Font(name="Arial", bold=True, size=11, color=CLR_TOTAL_FG)
+            cell.fill = _fill(CLR_TOTAL_BG)
+            cell.border = _thin_border()
+            cell.alignment = _right()
+            cell.number_format = '#,##0.00'
+    else:
+        total_cell.value = f"合計（共 {len(invoices)} 筆，多幣別請見下方幣別小計）"
 
     for col in range(1, len(SUMMARY_COLS) + 1):
         if col not in (1, 14, 16, 17):
@@ -237,13 +251,42 @@ def _build_summary_sheet(ws, invoices: list[dict], title: str,
             if not cell.value:
                 cell.fill = _fill(CLR_TOTAL_BG)
                 cell.border = _thin_border()
+        elif len(currencies) != 1:
+            cell = ws.cell(row=total_row, column=col)
+            cell.fill = _fill(CLR_TOTAL_BG)
+            cell.border = _thin_border()
 
     _set_row_height(ws, total_row, 22)
 
-    # 凍結前3列
-    ws.freeze_panes = f"A{DATA_START}"
+    if len(currencies) > 1:
+        for offset, currency in enumerate(sorted(currencies), start=1):
+            r = total_row + offset
+            ws.merge_cells(f"A{r}:M{r}")
+            label_cell = ws[f"A{r}"]
+            label_cell.value = f"{currency} 小計"
+            label_cell.font = Font(name="Arial", bold=True, size=11, color=CLR_TOTAL_FG)
+            label_cell.fill = _fill("FFF7ED")
+            label_cell.alignment = _center()
+            label_cell.border = _thin_border()
 
-    return total_sum
+            totals = currency_totals[currency]
+            for col, val in [(14, totals["subtotal"]), (16, totals["tax"]), (17, totals["total"])]:
+                cell = ws.cell(row=r, column=col, value=val)
+                cell.font = Font(name="Arial", bold=True, size=11, color=CLR_TOTAL_FG)
+                cell.fill = _fill("FFF7ED")
+                cell.border = _thin_border()
+                cell.alignment = _right()
+                cell.number_format = '#,##0.00'
+
+            for col in range(1, len(SUMMARY_COLS) + 1):
+                if col not in (1, 14, 16, 17):
+                    cell = ws.cell(row=r, column=col)
+                    if not cell.value:
+                        cell.fill = _fill("FFF7ED")
+                        cell.border = _thin_border()
+            _set_row_height(ws, r, 20)
+
+    ws.freeze_panes = f"A{DATA_START}"
 
 
 # ─────────────────────────────────────────
@@ -384,8 +427,30 @@ def _build_stats_sheet(ws, invoices: list[dict]):
         _set_row_height(ws, row, 18)
         return row + 1
 
-    # ── 1. 費用科目統計 ───────────────────────
-    current_row = _section_title(current_row, "📊 費用科目統計")
+    currency_totals = _build_currency_totals(invoices)
+    twd_invoices = [inv for inv in invoices if _normalized_currency(inv.get("currency", "TWD")) == "TWD"]
+
+    # ── 1. 幣別總覽 ───────────────────────────
+    current_row = _section_title(current_row, "💱 幣別總覽")
+    current_row = _sub_header(
+        current_row,
+        ["幣別", "筆數", "未稅合計", "稅額合計", "含稅合計"],
+        [12, 8, 15, 15, 15],
+    )
+
+    row_counter = 0
+    for currency, totals in sorted(currency_totals.items()):
+        bg = CLR_ALT_ROW if row_counter % 2 == 0 else "FFFFFF"
+        current_row = _data_row(
+            current_row,
+            [currency, totals["count"], totals["subtotal"], totals["tax"], totals["total"]],
+            bg,
+        )
+        row_counter += 1
+    current_row += 1
+
+    # ── 2. 費用科目統計 ───────────────────────
+    current_row = _section_title(current_row, "📊 費用科目統計 (TWD)")
     current_row = _sub_header(
         current_row,
         ["費用科目", "筆數", "未稅合計", "稅額合計", "含稅合計", "佔比(%)"],
@@ -394,7 +459,7 @@ def _build_stats_sheet(ws, invoices: list[dict]):
 
     acct_data: dict[str, dict] = {}
     grand_total = 0.0
-    for inv in invoices:
+    for inv in twd_invoices:
         k = inv.get("account_category", "（未分類）") or "（未分類）"
         if k not in acct_data:
             acct_data[k] = {"count": 0, "subtotal": 0.0, "tax": 0.0, "total": 0.0}
@@ -415,16 +480,16 @@ def _build_stats_sheet(ws, invoices: list[dict]):
     # 合計
     current_row = _data_row(
         current_row,
-        ["合計", len(invoices),
+        ["合計", len(twd_invoices),
          sum(v["subtotal"] for v in acct_data.values()),
          sum(v["tax"] for v in acct_data.values()),
-         grand_total, 100.0],
+         grand_total, 100.0 if grand_total else 0.0],
         CLR_TOTAL_BG,
     )
     current_row += 1
 
-    # ── 2. 部門統計 ───────────────────────────
-    current_row = _section_title(current_row, "🏢 部門費用統計")
+    # ── 3. 部門統計 ───────────────────────────
+    current_row = _section_title(current_row, "🏢 部門費用統計 (TWD)")
     current_row = _sub_header(
         current_row,
         ["部門", "筆數", "含稅合計", "佔比(%)"],
@@ -432,7 +497,7 @@ def _build_stats_sheet(ws, invoices: list[dict]):
     )
 
     dept_data: dict[str, dict] = {}
-    for inv in invoices:
+    for inv in twd_invoices:
         k = inv.get("department", "（未指定）") or "（未指定）"
         if k not in dept_data:
             dept_data[k] = {"count": 0, "total": 0.0}
@@ -447,8 +512,8 @@ def _build_stats_sheet(ws, invoices: list[dict]):
         row_counter += 1
     current_row += 1
 
-    # ── 3. 廠商統計 ───────────────────────────
-    current_row = _section_title(current_row, "🏪 廠商消費統計 (前10名)")
+    # ── 4. 廠商統計 ───────────────────────────
+    current_row = _section_title(current_row, "🏪 廠商消費統計 (TWD 前10名)")
     current_row = _sub_header(
         current_row,
         ["廠商名稱", "發票張數", "含稅合計", "平均金額"],
@@ -456,7 +521,7 @@ def _build_stats_sheet(ws, invoices: list[dict]):
     )
 
     vendor_data: dict[str, dict] = {}
-    for inv in invoices:
+    for inv in twd_invoices:
         k = inv.get("seller_name", "（未知廠商）") or "（未知廠商）"
         if k not in vendor_data:
             vendor_data[k] = {"count": 0, "total": 0.0}
@@ -471,8 +536,8 @@ def _build_stats_sheet(ws, invoices: list[dict]):
         row_counter += 1
     current_row += 1
 
-    # ── 4. 付款方式統計 ──────────────────────
-    current_row = _section_title(current_row, "💳 付款方式統計")
+    # ── 5. 付款方式統計 ──────────────────────
+    current_row = _section_title(current_row, "💳 付款方式統計 (TWD)")
     current_row = _sub_header(
         current_row,
         ["付款方式", "筆數", "金額合計", "佔比(%)"],
@@ -480,7 +545,7 @@ def _build_stats_sheet(ws, invoices: list[dict]):
     )
 
     pay_data: dict[str, dict] = {}
-    for inv in invoices:
+    for inv in twd_invoices:
         k = inv.get("payment_method", "（未填）") or "（未填）"
         if k not in pay_data:
             pay_data[k] = {"count": 0, "total": 0.0}
@@ -495,16 +560,17 @@ def _build_stats_sheet(ws, invoices: list[dict]):
         row_counter += 1
     current_row += 1
 
-    # ── 5. 總覽摘要 ──────────────────────────
+    # ── 6. 總覽摘要 ──────────────────────────
     current_row = _section_title(current_row, "📋 總覽摘要")
     summary_items = [
         ("發票總張數", len(invoices)),
-        ("含稅費用合計 (TWD)", f"NT$ {grand_total:,.0f}"),
-        ("未稅費用合計", f"NT$ {sum(_safe_float(inv.get('subtotal',0)) for inv in invoices):,.0f}"),
-        ("稅額合計", f"NT$ {sum(_safe_float(inv.get('tax_amount',0)) for inv in invoices):,.0f}"),
-        ("費用科目數", len(acct_data)),
-        ("部門數", len(dept_data)),
-        ("廠商數", len(vendor_data)),
+        ("TWD 發票張數", len(twd_invoices)),
+        ("TWD 含稅費用合計", f"NT$ {currency_totals.get('TWD', {}).get('total', 0.0):,.0f}"),
+        ("TWD 未稅費用合計", f"NT$ {currency_totals.get('TWD', {}).get('subtotal', 0.0):,.0f}"),
+        ("TWD 稅額合計", f"NT$ {currency_totals.get('TWD', {}).get('tax', 0.0):,.0f}"),
+        ("TWD 費用科目數", len(acct_data)),
+        ("TWD 部門數", len(dept_data)),
+        ("TWD 廠商數", len(vendor_data)),
         ("製表時間", datetime.now().strftime("%Y/%m/%d %H:%M:%S")),
     ]
 

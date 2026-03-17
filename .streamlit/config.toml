@@ -1,0 +1,13 @@
+[server]
+# 雲端部署時請勿開啟 fileWatcherType = "none"（讓 Cloud 自動管理）
+maxUploadSize = 50
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+primaryColor = "#3B82F6"
+backgroundColor = "#F8FAFC"
+secondaryBackgroundColor = "#EFF6FF"
+textColor = "#1F2937"
+font = "sans serif"

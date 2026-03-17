@@ -523,13 +523,17 @@ def pdf_to_images(pdf_bytes: bytes) -> list:
     if not HAS_PYMUPDF:
         st.warning("⚠️ 未安裝 PyMuPDF，無法處理 PDF，請改上傳圖片格式。")
         return []
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    images = []
-    for page in doc:
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-        images.append(pix.tobytes("png"))
-    doc.close()
-    return images
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        images = []
+        for page in doc:
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+            images.append(pix.tobytes("png"))
+        doc.close()
+        return images
+    except Exception as e:
+        print(f"[SECURITY LOG] pdf_to_images error: {type(e).__name__}: {e}")
+        raise ValueError("PDF 解析失敗，可能為加密、損毀或不支援的檔案") from e
 
 
 def recognize_invoice(image_bytes: bytes, filename: str = "") -> dict:
@@ -652,6 +656,21 @@ def _opt_idx(options: list, val: str, default: int = 0) -> int:
         return default
 
 
+def _safe_amount_for_metrics(value) -> float:
+    try:
+        return float(str(value).replace(",", ""))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _currency_totals(invoices: list[dict]) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    for inv in invoices:
+        currency = (str(inv.get("currency", "TWD")).strip() or "TWD").upper()
+        totals[currency] = totals.get(currency, 0.0) + _safe_amount_for_metrics(inv.get("total_amount", 0))
+    return totals
+
+
 # ─────────────────────────────────────────
 # 主應用介面
 # ─────────────────────────────────────────
@@ -672,13 +691,14 @@ def main_app():
         st.markdown("---")
         st.markdown("### 📈 本次統計")
         count = len(st.session_state.invoices)
-        total = sum(
-            float(str(inv.get("total_amount", 0)).replace(",", "") or 0)
-            for inv in st.session_state.invoices
-            if str(inv.get("total_amount", "")).replace(".", "").replace(",", "").isdigit()
-        )
+        totals_by_currency = _currency_totals(st.session_state.invoices)
+        twd_total = totals_by_currency.get("TWD", 0.0)
         st.metric("已辨識", f"{count} 張")
-        st.metric("合計金額", f"NT$ {total:,.0f}")
+        st.metric("TWD 合計", f"NT$ {twd_total:,.0f}")
+        non_twd_totals = {k: v for k, v in totals_by_currency.items() if k != "TWD" and v}
+        if non_twd_totals:
+            extras = "｜".join(f"{ccy} {amt:,.2f}" for ccy, amt in sorted(non_twd_totals.items()))
+            st.caption(f"其他幣別另計：{extras}")
 
         # ── 每日 API 用量（全站共用）────────────
         st.markdown("---")
@@ -801,7 +821,11 @@ def main_app():
                         continue
 
                     if f.name.lower().endswith(".pdf"):
-                        imgs = pdf_to_images(raw)
+                        try:
+                            imgs = pdf_to_images(raw)
+                        except ValueError as e:
+                            skipped.append(f"{f.name}：{e}")
+                            continue
                         for i, img_bytes in enumerate(imgs):
                             tasks.append((img_bytes, f"{f.name}_p{i+1}.png"))
                     else:
