@@ -1,6 +1,6 @@
 [server]
 # 雲端部署時請勿開啟 fileWatcherType = "none"（讓 Cloud 自動管理）
-maxUploadSize = 50
+maxUploadSize = 20
 
 [browser]
 gatherUsageStats = false

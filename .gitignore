@@ -1,0 +1,5 @@
+.venv/
+.playwright-cli/
+.streamlit/secrets.toml
+__pycache__/
+*.pyc

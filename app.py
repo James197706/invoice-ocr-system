@@ -36,6 +36,7 @@ import threading                # [SEC] 執行緒鎖
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date, timedelta
 from io import BytesIO
+from typing import Optional
 
 try:
     import fitz  # PyMuPDF
@@ -48,7 +49,7 @@ from excel_exporter import create_invoice_excel
 # ─────────────────────────────────────────
 # 版本常數
 # ─────────────────────────────────────────
-APP_VERSION = "3.1"
+APP_VERSION = "3.2"
 
 # ─────────────────────────────────────────
 # 共用選項列表（DRY：單一定義，多處共用）
@@ -66,6 +67,79 @@ TYPE_OPTIONS = ["台灣二聯發票", "台灣三聯發票", "一般收據", "自
 PAY_OPTIONS  = ["", "現金", "轉帳", "信用卡", "支票", "其他"]
 
 CURR_OPTIONS = ["TWD", "USD", "EUR", "JPY", "CNY", "其他"]
+
+USAGE_GUIDE = [
+    {
+        "title": "1. 登入與開始使用",
+        "body": [
+            "輸入系統密碼後登入；若閒置超過 120 分鐘，系統會自動登出。",
+            "首次使用前，請先確認左側欄位顯示「API 金鑰已設定」。",
+            "建議先在側邊欄設定預設部門、費用科目與專案代碼，後續辨識結果會自動帶入空白欄位。",
+        ],
+    },
+    {
+        "title": "2. 上傳辨識",
+        "body": [
+            "支援 PNG、JPG、JPEG、PDF，單檔上限 20MB；PDF 會自動拆頁逐張辨識。",
+            "可一次多選多張檔案，系統會並發辨識以縮短等待時間。",
+            "若今日剩餘額度不足，系統會先處理可用額度內的張數，並提示剩餘檔案稍後再試。",
+        ],
+    },
+    {
+        "title": "3. 審核與修正",
+        "body": [
+            "辨識完成後切換到「審核資料」，逐筆確認發票日期、統編、金額與品項明細。",
+            "低信心或辨識失敗的單據會顯示提醒，請優先人工覆核。",
+            "若要刪除資料，系統會要求二次確認，避免誤刪。",
+        ],
+    },
+    {
+        "title": "4. 匯出與交付",
+        "body": [
+            "在「匯出 Excel」輸入報表標題、期間與製表人後，即可產生 Excel。",
+            "輸出內容包含發票彙總、品項明細、統計分析三個工作表。",
+            "若公司已有 ERP/會計系統，建議將匯出檔作為過渡流程，後續可再規劃 API 串接。",
+        ],
+    },
+]
+
+BEST_PRACTICES = [
+    "同一批次盡量上傳同月份、同部門的單據，能降低審核切換成本。",
+    "先確認發票影像方向正確、內容清晰，能明顯提升 OCR 成功率。",
+    "財務關帳前，建議先篩查失敗單據與低信心單據，再進行整批匯出。",
+    "若同供應商單據很多，可固定使用一致的費用科目與專案代碼，提升作業一致性。",
+]
+
+PLATFORM_RELEASE_NOTES = [
+    {
+        "version": "v3.2",
+        "date": "2026-03-17",
+        "items": [
+            "平台內新增「使用說明」與「版本更新」頁籤，使用者可直接在系統內查閱操作指引與更新內容。",
+            "新增辨識前剩餘額度預檢，避免超過今日可用額度的檔案進入辨識流程後才失敗。",
+            "修正預設部門、費用科目、專案代碼帶入邏輯，空白欄位現在會正確套用。",
+            "強化 AI JSON 解析，兼容多段文字與 code fence 格式回應。",
+            "統一平台與後端的單檔上限為 20MB，避免操作說明與實際限制不一致。",
+        ],
+    },
+    {
+        "version": "v3.1",
+        "date": "2026-03-17",
+        "items": [
+            "移除硬編碼預設密碼，未設定 APP_PASSWORD 時直接拒絕啟動。",
+            "新增 AI 回應 XSS 防護、全站 API 用量統計、暴力破解防護與 session 閒置逾時。",
+            "補上檔案大小限制、magic bytes 驗證與例外訊息遮罩。",
+        ],
+    },
+    {
+        "version": "v3.0",
+        "date": "2026-03-12",
+        "items": [
+            "加入批次並發辨識、Anthropic Client 快取與用量進度條。",
+            "改善刪除/清除二次確認與用量接近上限提醒。",
+        ],
+    },
+]
 
 # ─────────────────────────────────────────
 # 頁面設定
@@ -349,7 +423,7 @@ _MAGIC_BYTES: dict[str, list[tuple[int, bytes]]] = {
 }
 
 
-def _validate_upload(raw: bytes, filename: str) -> str | None:
+def _validate_upload(raw: bytes, filename: str) -> Optional[str]:
     """
     驗證上傳檔案。
     - 超過 20MB → 拒絕
@@ -519,6 +593,26 @@ def encode_image(image_bytes: bytes) -> str:
     return base64.standard_b64encode(image_bytes).decode("utf-8")
 
 
+def _extract_response_text(response) -> str:
+    parts = []
+    for block in getattr(response, "content", []) or []:
+        text = getattr(block, "text", "")
+        if text:
+            parts.append(text)
+    return "\n".join(parts).strip()
+
+
+def _parse_ai_json(raw_text: str) -> dict:
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+
+    json_match = re.search(r'\{[\s\S]*\}', cleaned)
+    payload = json_match.group() if json_match else cleaned
+    return json.loads(payload)
+
+
 def pdf_to_images(pdf_bytes: bytes) -> list:
     if not HAS_PYMUPDF:
         st.warning("⚠️ 未安裝 PyMuPDF，無法處理 PDF，請改上傳圖片格式。")
@@ -579,9 +673,8 @@ def recognize_invoice(image_bytes: bytes, filename: str = "") -> dict:
             }],
         )
 
-        raw = response.content[0].text.strip()
-        json_match = re.search(r'\{[\s\S]*\}', raw)
-        data = json.loads(json_match.group() if json_match else raw)
+        raw = _extract_response_text(response)
+        data = _parse_ai_json(raw)
         data.setdefault("items", [])
         data["source_file"]   = filename
         data["recognized_at"] = datetime.now().strftime("%Y/%m/%d %H:%M")
@@ -671,6 +764,43 @@ def _currency_totals(invoices: list[dict]) -> dict[str, float]:
     return totals
 
 
+def _apply_accounting_defaults(record: dict, dept: str, acct: str, proj: str) -> None:
+    if not record.get("department"):
+        record["department"] = dept
+    if not record.get("account_category"):
+        record["account_category"] = acct
+    if not record.get("project_code"):
+        record["project_code"] = proj
+
+
+def render_usage_guide() -> None:
+    st.markdown("### 📘 平台使用說明")
+    st.caption("給財務人員與業務同仁的快速上手指南，建議第一次使用時先看一遍。")
+
+    for section in USAGE_GUIDE:
+        with st.expander(section["title"], expanded=(section["title"] == USAGE_GUIDE[0]["title"])):
+            for item in section["body"]:
+                st.markdown(f"- {item}")
+
+    st.markdown("### ✅ 使用建議")
+    for tip in BEST_PRACTICES:
+        st.markdown(f"- {tip}")
+
+    st.info(
+        "若辨識後仍需大量人工修正，通常代表上傳影像品質、票據格式差異或會計欄位規則需要進一步優化。"
+    )
+
+
+def render_release_notes() -> None:
+    st.markdown("### 🆕 版本更新")
+    st.caption("平台內直接查看版本差異，方便財務、IT 與管理者同步變更內容。")
+
+    for entry in PLATFORM_RELEASE_NOTES:
+        with st.expander(f"{entry['version']}｜{entry['date']}", expanded=(entry["version"] == APP_VERSION)):
+            for item in entry["items"]:
+                st.markdown(f"- {item}")
+
+
 # ─────────────────────────────────────────
 # 主應用介面
 # ─────────────────────────────────────────
@@ -678,7 +808,7 @@ def main_app():
     # ── 側邊欄 ────────────────────────────────
     with st.sidebar:
         st.markdown(
-            f'<div class="user-badge">🏢 <b>{COMPANY_NAME_SAFE or "發票辨識系統"}|/b><br>'
+            f'<div class="user-badge">🏢 <b>{COMPANY_NAME_SAFE or "發票辨識系統"}</b><br>'
             f'<span style="color:#64748b;font-size:.82rem;">雲端版 v{APP_VERSION}｜Claude AI</span></div>',
             unsafe_allow_html=True,
         )
@@ -762,8 +892,8 @@ def main_app():
     </div>
     """, unsafe_allow_html=True)
 
-    tab_upload, tab_review, tab_export = st.tabs(
-        ["📤 上傳辨識", "📋 審核資料", "📥 匯出 Excel"]
+    tab_upload, tab_review, tab_export, tab_help, tab_updates = st.tabs(
+        ["📤 上傳辨識", "📋 審核資料", "📥 匯出 Excel", "📘 使用說明", "🆕 版本更新"]
     )
 
     # ══════════════════════════════════════════
@@ -831,6 +961,18 @@ def main_app():
                     else:
                         tasks.append((raw, f.name))
 
+                remaining_quota = max(DAILY_LIMIT - _get_today_api_count(), 0)
+                if remaining_quota <= 0:
+                    st.error(f"🚫 今日可用辨識額度已用完（上限 {DAILY_LIMIT} 張）。")
+                    tasks = []
+                elif len(tasks) > remaining_quota:
+                    overflow = len(tasks) - remaining_quota
+                    tasks = tasks[:remaining_quota]
+                    st.warning(
+                        f"⚠️ 今日剩餘額度僅 {remaining_quota} 張，已先處理前 {remaining_quota} 張，"
+                        f"其餘 {overflow} 張請稍後再試。"
+                    )
+
                 if skipped:
                     for msg in skipped:
                         st.warning(f"⚠️ 跳過：{msg}")
@@ -840,9 +982,7 @@ def main_app():
 
                     for result in results:
                         if result:
-                            result.setdefault("department",       default_dept)
-                            result.setdefault("project_code",     default_proj)
-                            result.setdefault("account_category", default_acct)
+                            _apply_accounting_defaults(result, default_dept, default_acct, default_proj)
 
                     st.session_state.invoices.extend([r for r in results if r])
                     progress.empty()
@@ -1064,6 +1204,12 @@ def main_app():
                     use_container_width=True,
                 )
                 st.success(f"✅ Excel 報表已產生（{len(st.session_state.invoices)} 張發票，{len(excel_bytes):,} bytes）")
+
+    with tab_help:
+        render_usage_guide()
+
+    with tab_updates:
+        render_release_notes()
 
 
 # ─────────────────────────────────────────
