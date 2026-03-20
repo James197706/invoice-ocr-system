@@ -110,13 +110,49 @@ http://localhost:8501
 
 ## 部署
 
-此專案設計目標是 Streamlit Cloud。部署時請在平台上設定同樣的 Secrets：
+此專案目前同時支援：
 
-- `ANTHROPIC_API_KEY`
-- `APP_PASSWORD`
-- `COMPANY_NAME`
-- `ADMIN_NOTE`
-- `DAILY_API_LIMIT`
+- 本機 / 內部環境：使用 `.streamlit/secrets.toml`
+- Google Cloud Run：使用環境變數與 Secret Manager
+
+### Cloud Run 部署方式
+
+1. 先建立兩個 Secret Manager secrets：
+
+- `anthropic-api-key`
+- `invoice-app-password`
+
+2. 建立或確認 Artifact Registry repository 存在，例如：
+
+```bash
+gcloud artifacts repositories create cloud-run-source-deploy \
+  --repository-format=docker \
+  --location=asia-east1
+```
+
+3. 使用 Cloud Build 建置並部署：
+
+```bash
+gcloud builds submit \
+  --config cloudbuild.yaml \
+  --substitutions=_SERVICE_NAME=invoice-ocr-system,_REGION=asia-east1
+```
+
+4. Cloud Run 執行時會使用：
+
+- Secret Manager:
+  - `ANTHROPIC_API_KEY`
+  - `APP_PASSWORD`
+- 一般環境變數:
+  - `COMPANY_NAME`
+  - `ADMIN_NOTE`
+  - `DAILY_API_LIMIT`
+
+### Cloud Run 驗證重點
+
+- 容器是否成功在 `$PORT` 啟動 Streamlit
+- `ANTHROPIC_API_KEY` 與 `APP_PASSWORD` 是否已正確掛入
+- PDF 上傳、OCR、審核資料、Excel 匯出是否可正常完成
 
 ## 目前限制
 

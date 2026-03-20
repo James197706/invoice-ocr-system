@@ -4,6 +4,12 @@
 
 ---
 
+## [3.4] — 2026-03-20
+
+### ☁️ 部署升級
+- **新增 Cloud Run 部署支援**：補上 `Dockerfile`、`.dockerignore`、`cloudbuild.yaml`，可改由 Google Cloud Run 託管。
+- **Secrets 讀取支援環境變數**：應用程式現在可優先讀取 Cloud Run 環境變數，並保留 `st.secrets` 相容性。
+
 ## [3.3] — 2026-03-17
 
 ### 🧾 掃描 PDF 多發票辨識

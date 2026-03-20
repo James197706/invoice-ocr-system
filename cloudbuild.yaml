@@ -1,0 +1,52 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE_NAME}:${SHORT_SHA}
+      - .
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE_NAME}
+      - --image
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE_NAME}:${SHORT_SHA}
+      - --region
+      - ${_REGION}
+      - --platform
+      - managed
+      - --allow-unauthenticated
+      - --port
+      - "8080"
+      - --memory
+      - ${_MEMORY}
+      - --cpu
+      - ${_CPU}
+      - --min-instances
+      - ${_MIN_INSTANCES}
+      - --max-instances
+      - ${_MAX_INSTANCES}
+      - --set-env-vars
+      - COMPANY_NAME=${_COMPANY_NAME},ADMIN_NOTE=${_ADMIN_NOTE},DAILY_API_LIMIT=${_DAILY_API_LIMIT}
+      - --set-secrets
+      - ANTHROPIC_API_KEY=${_ANTHROPIC_API_KEY_SECRET}:latest,APP_PASSWORD=${_APP_PASSWORD_SECRET}:latest
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE_NAME}:${SHORT_SHA}
+
+substitutions:
+  _SERVICE_NAME: invoice-ocr-system
+  _REGION: asia-east1
+  _AR_REPO: cloud-run-source-deploy
+  _MEMORY: 1Gi
+  _CPU: "1"
+  _MIN_INSTANCES: "0"
+  _MAX_INSTANCES: "3"
+  _COMPANY_NAME: 全寵家科技股份有限公司
+  _ADMIN_NOTE: 如需協助請聯絡管理員
+  _DAILY_API_LIMIT: "200"
+  _ANTHROPIC_API_KEY_SECRET: anthropic-api-key
+  _APP_PASSWORD_SECRET: invoice-app-password

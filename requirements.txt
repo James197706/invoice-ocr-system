@@ -1,5 +1,5 @@
 # 發票智能辨識系統 — 雲端版套件清單
-# 適用於 Streamlit Cloud 部署
+# 適用於雲端部署（含 Cloud Run）
 
 # Web 介面框架
 streamlit>=1.32.0

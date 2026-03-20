@@ -2,10 +2,10 @@
 發票智能辨識系統 — 雲端版 v3.1（Security Patch）
 Invoice OCR System for Finance Teams (Cloud Edition)
 
-部署平台：Streamlit Cloud
+部署平台：Google Cloud Run / Streamlit
 功能：Claude AI 視覺辨識發票 → 匯出格式化 Excel
 
-設定說明（Streamlit Cloud Secrets）：
+設定說明（環境變數或 Streamlit Secrets）：
   ANTHROPIC_API_KEY = "sk-ant-api..."
   APP_PASSWORD      = "your-password"   ← 必填，未設定系統將拒絕啟動
   COMPANY_NAME      = "貴公司名稱"          # 選填
@@ -30,6 +30,7 @@ import base64
 import html as html_module      # [SEC] XSS 防護
 import hmac                     # [SEC] timing-safe 密碼比對
 import json
+import os
 import pandas as pd
 import re
 import threading                # [SEC] 執行緒鎖
@@ -49,7 +50,7 @@ from excel_exporter import create_invoice_excel
 # ─────────────────────────────────────────
 # 版本常數
 # ─────────────────────────────────────────
-APP_VERSION = "3.3"
+APP_VERSION = "3.4"
 
 # ─────────────────────────────────────────
 # 共用選項列表（DRY：單一定義，多處共用）
@@ -234,7 +235,10 @@ div[data-testid="stExpander"] { border:1px solid #e2e8f0; border-radius:8px; }
 # Secrets 讀取（雲端部署用）
 # ─────────────────────────────────────────
 def _get_secret(key: str, default: str = "") -> str:
-    """安全讀取 Streamlit Secrets，找不到時回傳預設值"""
+    """優先讀取環境變數，其次讀取 Streamlit Secrets。"""
+    env_value = os.getenv(key)
+    if env_value is not None:
+        return env_value
     try:
         return st.secrets[key]
     except (KeyError, FileNotFoundError):
@@ -471,7 +475,7 @@ def login_page():
     # [SEC P0] 未設定密碼 → 系統安全錯誤，拒絕服務
     if not APP_PASSWORD:
         st.error("🔒 系統安全錯誤：尚未設定 APP_PASSWORD")
-        st.info("請管理員至 Streamlit Cloud → App settings → Secrets 設定 APP_PASSWORD。")
+        st.info("請管理員設定 APP_PASSWORD（可使用環境變數或 Streamlit secrets）。")
         st.stop()
         return
 
