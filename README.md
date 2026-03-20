@@ -138,6 +138,14 @@ gcloud builds submit \
   --substitutions=_SERVICE_NAME=invoice-ocr-system,_REGION=asia-east1
 ```
 
+如需自訂映像標籤，可額外加入 `_IMAGE_TAG`，例如：
+
+```bash
+gcloud builds submit \
+  --config cloudbuild.yaml \
+  --substitutions=_SERVICE_NAME=invoice-ocr-system,_REGION=asia-east1,_IMAGE_TAG=release-20260320
+```
+
 4. Cloud Run 執行時會使用：
 
 - Secret Manager:

@@ -9,6 +9,10 @@
 ### ☁️ 部署升級
 - **新增 Cloud Run 部署支援**：補上 `Dockerfile`、`.dockerignore`、`cloudbuild.yaml`，可改由 Google Cloud Run 託管。
 - **Secrets 讀取支援環境變數**：應用程式現在可優先讀取 Cloud Run 環境變數，並保留 `st.secrets` 相容性。
+- **修正手動 Cloud Build 部署標籤**：`cloudbuild.yaml` 改用可覆寫的 `_IMAGE_TAG`，避免手動執行 `gcloud builds submit` 時因缺少 `SHORT_SHA` 而失敗。
+
+### 📘 平台內容修正
+- **平台內版本更新補上 v3.4**：雲端版首頁已顯示 `v3.4`，版本更新頁籤現在也同步列出 Cloud Run 相關異動。
 
 ## [3.3] — 2026-03-17
 

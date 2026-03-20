@@ -3,7 +3,7 @@ steps:
     args:
       - build
       - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE_NAME}:${SHORT_SHA}
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE_NAME}:${_IMAGE_TAG}
       - .
 
   - name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -13,7 +13,7 @@ steps:
       - deploy
       - ${_SERVICE_NAME}
       - --image
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE_NAME}:${SHORT_SHA}
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE_NAME}:${_IMAGE_TAG}
       - --region
       - ${_REGION}
       - --platform
@@ -35,12 +35,13 @@ steps:
       - ANTHROPIC_API_KEY=${_ANTHROPIC_API_KEY_SECRET}:latest,APP_PASSWORD=${_APP_PASSWORD_SECRET}:latest
 
 images:
-  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE_NAME}:${SHORT_SHA}
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/${_SERVICE_NAME}:${_IMAGE_TAG}
 
 substitutions:
   _SERVICE_NAME: invoice-ocr-system
   _REGION: asia-east1
   _AR_REPO: cloud-run-source-deploy
+  _IMAGE_TAG: manual
   _MEMORY: 1Gi
   _CPU: "1"
   _MIN_INSTANCES: "0"

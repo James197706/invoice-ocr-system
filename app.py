@@ -114,6 +114,15 @@ BEST_PRACTICES = [
 
 PLATFORM_RELEASE_NOTES = [
     {
+        "version": "v3.4",
+        "date": "2026-03-20",
+        "items": [
+            "新增 Google Cloud Run 部署支援，系統可改由容器方式部署並對外提供公開網址。",
+            "Secrets 讀取現在優先支援環境變數，並保留與 Streamlit secrets 的相容性。",
+            "補強雲端部署文件，整理 Secret Manager、Artifact Registry 與 Cloud Run 的設定步驟。",
+        ],
+    },
+    {
         "version": "v3.3",
         "date": "2026-03-17",
         "items": [
